@@ -62,3 +62,38 @@ Copier
 Modifier
 https://x-zone.globalglimpse.ma/storage/logos/nom_de_ton_fichier.png
 • Si l’image s’affiche : problème résolu !
+
+
+Workflow classique pour mettre à jour le repo
+1- Voir les fichiers modifiés
+
+bash
+Copier
+Modifier
+git status
+2️- Ajouter les modifications
+
+Tout d’un coup :
+
+bash
+Copier
+Modifier
+git add .
+Ou fichier par fichier :
+
+bash
+Copier
+Modifier
+git add chemin/vers/fichier
+3️- Créer un commit avec un message clair
+
+bash
+Copier
+Modifier
+git commit -m "Description de la modification"
+4️- Pousser vers GitHub
+
+bash
+Copier
+Modifier
+git push origin main
