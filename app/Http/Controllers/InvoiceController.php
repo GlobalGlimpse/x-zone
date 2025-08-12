@@ -389,6 +389,30 @@ class InvoiceController extends Controller
     }
 
     /**
+     * Réouvrir une facture remboursée (la remettre en brouillon)
+     */
+    public function reopen(string $id): RedirectResponse
+    {
+        $invoice = Invoice::findOrFail($id);
+
+        if (!$invoice->canBeReopened()) {
+            return back()->with('error', 'Seules les factures remboursées peuvent être réouvertes.');
+        }
+
+        $from = (string) $invoice->status;
+        $invoice->update(['status' => Invoice::STATUS_DRAFT]);
+
+        $invoice->statusHistories()->create([
+            'user_id'     => Auth::id(),
+            'from_status' => $from,
+            'to_status'   => Invoice::STATUS_DRAFT,
+            'comment'     => 'Facture réouverte et remise en brouillon',
+        ]);
+
+        return back()->with('success', 'Facture réouverte avec succès.');
+    }
+
+    /**
      * Conversion d'un devis en facture
      */
     public function convertFromQuote(Quote $quote, ConvertQuoteToInvoiceAction $action): RedirectResponse

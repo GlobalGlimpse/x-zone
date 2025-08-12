@@ -260,6 +260,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::post('/{invoice}/mark-paid', [InvoiceController::class, 'markAsPaid'])->name('mark-paid');
         Route::post('/{invoice}/send-reminder', [InvoiceController::class, 'sendReminder'])->name('send-reminder');
         Route::post('/{invoice}/change-status', [InvoiceController::class, 'changeStatus'])->name('change-status');
+        Route::post('/{invoice}/reopen', [InvoiceController::class, 'reopen'])->middleware('permission:invoice_reopen')->name('reopen');
     });
 
     /* ------------------------------------------------------------------ */

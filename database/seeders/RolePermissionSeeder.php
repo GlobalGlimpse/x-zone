@@ -80,6 +80,14 @@ class RolePermissionSeeder extends Seeder
             'stock_delete',
             'stock_restore',
 
+            // Factures
+            'invoice_list',
+            'invoice_create',
+            'invoice_show',
+            'invoice_edit',
+            'invoice_delete',
+            'invoice_reopen',
+
         ];
 
         foreach ($permissions as $permission) {
@@ -113,6 +121,10 @@ class RolePermissionSeeder extends Seeder
             'stock_create',
             'stock_edit',
             'stock_delete',
+            'invoice_list',
+            'invoice_create',
+            'invoice_edit',
+            'invoice_reopen',
         ]);
     }
 }

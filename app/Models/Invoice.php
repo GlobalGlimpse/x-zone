@@ -152,4 +152,9 @@ class Invoice extends Model
     {
         return in_array($this->status, [self::STATUS_DRAFT, self::STATUS_CANCELLED], true);
     }
+
+    public function canBeReopened(): bool
+    {
+        return $this->status === self::STATUS_REFUNDED;
+    }
 }
