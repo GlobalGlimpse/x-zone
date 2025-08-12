@@ -1,0 +1,18 @@
+{
+  "genericId": 0,
+  "map": {
+    "1":  "rams",
+    "2":  "processors",
+    "3":  "hard_drives",
+    "4":  "power_supplies",
+    "5":  "motherboards",
+    "6":  "network_cards",
+    "7":  "graphic_cards",
+    "8":  "licenses",
+    "9":  "softwares",
+    "10": "accessories",
+    "11": "laptop",
+    "12": "desktops",
+    "13": "servers"
+  }
+}
