@@ -9,7 +9,10 @@ use App\Models\{
     Currency,
     TaxRate,
     ProductImage,
-    ProductCompatibility
+    ProductCompatibility,
+    CategoryAttribute,
+    ProductAttributeValue,
+    ProductVariant
 };
 use App\Http\Requests\ProductRequest;
 use Illuminate\Http\Request;
@@ -25,280 +28,156 @@ class ProductController extends Controller
     public function index(Request $request): Response
     {
         $query = Product::query()
-            ->with(['brand:id,name', 'category:id,name', 'currency:code,symbol']);
+            ->with(['brand:id,name', 'category:id,name,parent_id', 'currency:code,symbol'])
+            ->withCount(['variants']);
 
-        // Recherche globale améliorée
+        // Recherche globale
         if ($search = trim($request->input('search'))) {
-            foreach (preg_split('/\s+/', $search, -1, PREG_SPLIT_NO_EMPTY) as $term) {
-                $like = "%{$term}%";
-                $query->where(function ($q) use ($term, $like) {
-                    // Recherche dans les champs textuels
-                    $q->where('name', 'like', $like)
-                      ->orWhere('description', 'like', $like)
-                      ->orWhereHas('category', fn($subQ) => $subQ->where('name', 'like', $like))
-                      ->orWhereHas('brand', fn($subQ) => $subQ->where('name', 'like', $like));
-
-                    // Si c'est un nombre, rechercher aussi dans les champs numériques
-                    if (is_numeric($term)) {
-                        $numericValue = (float) $term;
-                        $intValue = (int) $term;
-
-                        $q->orWhere('price', '=', $numericValue)
-                          ->orWhere('stock_quantity', '=', $intValue)
-                          // Recherche partielle dans le prix (ex: "299" trouve "299.99")
-                          ->orWhere('price', 'like', $like)
-                          // Recherche par année dans created_at
-                          ->orWhereYear('created_at', '=', $intValue);
-                    }
-
-                    // Détection et traitement des formats de date
-                    $this->addDateSearchConditions($q, $term);
-                });
-            }
-        }
-
-        // Filtres spécifiques
-        if ($name = $request->input('name')) {
-            $query->where('name', 'like', "%{$name}%");
-        }
-
-        if ($cat = $request->input('category')) {
-            $query->whereHas('category', fn ($q) => $q->where('name', 'like', "%{$cat}%"));
-        }
-
-        if ($status = $request->input('status')) {
-            $status === 'actif'
-                ? $query->whereNull('deleted_at')
-                : $query->whereNotNull('deleted_at');
-        }
-
-        // Filtres numériques pour le prix
-        if ($priceOperator = $request->input('price_operator')) {
-            if ($priceOperator === 'between') {
-                $minPrice = $request->input('price_min');
-                $maxPrice = $request->input('price_max');
-                if ($minPrice !== null && $maxPrice !== null) {
-                    $query->whereBetween('price', [(float)$minPrice, (float)$maxPrice]);
-                }
-            } else {
-                $price = $request->input('price');
-                if ($price !== null && $price !== '') {
-                    switch ($priceOperator) {
-                        case 'equals':
-                            $query->where('price', '=', (float)$price);
-                            break;
-                        case 'gt':
-                            $query->where('price', '>', (float)$price);
-                            break;
-                        case 'gte':
-                            $query->where('price', '>=', (float)$price);
-                            break;
-                        case 'lt':
-                            $query->where('price', '<', (float)$price);
-                            break;
-                        case 'lte':
-                            $query->where('price', '<=', (float)$price);
-                            break;
-                    }
-                }
-            }
-        }
-
-        // Filtres numériques pour le stock
-        if ($stockOperator = $request->input('stock_operator')) {
-            if ($stockOperator === 'between') {
-                $minStock = $request->input('stock_min');
-                $maxStock = $request->input('stock_max');
-                if ($minStock !== null && $maxStock !== null) {
-                    $query->whereBetween('stock_quantity', [(int)$minStock, (int)$maxStock]);
-                }
-            } else {
-                $stock = $request->input('stock');
-                if ($stock !== null && $stock !== '') {
-                    switch ($stockOperator) {
-                        case 'equals':
-                            $query->where('stock_quantity', '=', (int)$stock);
-                            break;
-                        case 'gt':
-                            $query->where('stock_quantity', '>', (int)$stock);
-                            break;
-                        case 'gte':
-                            $query->where('stock_quantity', '>=', (int)$stock);
-                            break;
-                        case 'lt':
-                            $query->where('stock_quantity', '<', (int)$stock);
-                            break;
-                        case 'lte':
-                            $query->where('stock_quantity', '<=', (int)$stock);
-                            break;
-                    }
-                }
-            }
-        }
-
-        // Filtres de date
-        if ($startDate = $request->input('date_start')) {
-            $query->whereDate('created_at', '>=', $startDate);
-        }
-        if ($endDate = $request->input('date_end')) {
-            $query->whereDate('created_at', '<=', $endDate);
-        }
-
-        $query->orderBy($request->input('sort', 'created_at'), $request->input('dir', 'desc'));
-        $per = (int) $request->input('per_page', 10);
-        $products = $per === -1
-            ? $query->paginate($query->count())->appends($request->query())
-            : $query->paginate($per)->appends($request->query());
-
-        return Inertia::render('Products/Index', [
-            'products' => $products,
-            'filters'  => $request->only([
-                'search', 'name', 'category', 'status',
-                'price', 'price_operator', 'price_min', 'price_max',
-                'stock', 'stock_operator', 'stock_min', 'stock_max',
-                'date_start', 'date_end'
-            ]),
-            'sort'     => $request->input('sort', 'created_at'),
-            'dir'      => $request->input('dir', 'desc'),
-            'flash'    => session()->only(['success', 'error']),
-        ]);
-    }
-
-    /**
-     * Ajoute les conditions de recherche pour les dates dans différents formats
-     */
-    private function addDateSearchConditions($query, string $term): void
-    {
-        // Formats de date supportés
-        $dateFormats = [
-            '/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/' => 'd/m/Y',     // 16/06/2025
-            '/^(\d{1,2})-(\d{1,2})-(\d{4})$/' => 'd-m-Y',       // 16-06-2025
-            '/^(\d{4})-(\d{1,2})-(\d{1,2})$/' => 'Y-m-d',       // 2025-06-16
-            '/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/' => 'd.m.Y',     // 16.06.2025
-        ];
-
-        foreach ($dateFormats as $pattern => $format) {
-            if (preg_match($pattern, $term)) {
-                try {
-                    // Essayer de parser la date avec Carbon
-                    $date = Carbon::createFromFormat($format, $term);
-                    if ($date) {
-                        $formattedDate = $date->format('Y-m-d');
-
-                        // Recherche exacte par date
-                        $query->orWhereDate('created_at', '=', $formattedDate)
-                              ->orWhereDate('updated_at', '=', $formattedDate);
-
-                        // Recherche par composants de date
-                        $query->orWhere(function($subQuery) use ($date) {
-                            $subQuery->whereYear('created_at', $date->year)
-                                    ->whereMonth('created_at', $date->month)
-                                    ->whereDay('created_at', $date->day);
-                        });
-
-                        break; // Sortir de la boucle une fois qu'un format correspond
-                    }
-                } catch (\Exception $e) {
-                    // Si la conversion échoue, continuer avec le format suivant
-                    continue;
-                }
-            }
-        }
-
-        // Recherche partielle pour les années (ex: "2025" trouve toutes les dates de 2025)
-        if (preg_match('/^\d{4}$/', $term)) {
-            $year = (int) $term;
-            $query->orWhereYear('created_at', '=', $year)
-                  ->orWhereYear('updated_at', '=', $year);
-        }
-
-        // Recherche partielle pour les mois/années (ex: "06/2025" ou "06-2025")
-        if (preg_match('/^(\d{1,2})[\/\-](\d{4})$/', $term, $matches)) {
-            $month = (int) $matches[1];
-            $year = (int) $matches[2];
-
-            $query->orWhere(function($subQuery) use ($month, $year) {
-                $subQuery->whereYear('created_at', $year)
-                        ->whereMonth('created_at', $month);
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('description', 'like', "%{$search}%")
+                  ->orWhere('sku', 'like', "%{$search}%")
+                  ->orWhereHas('category', fn($subQ) => $subQ->where('name', 'like', "%{$search}%"))
+                  ->orWhereHas('brand', fn($subQ) => $subQ->where('name', 'like', "%{$search}%"))
+                  // Recherche dans les attributs
+                  ->orWhereHas('attributeValues', function ($attrQ) use ($search) {
+                      $attrQ->where('value', 'like', "%{$search}%");
+                  });
             });
         }
 
-        // Recherche pour les jours/mois (ex: "16/06")
-        if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})$/', $term, $matches)) {
-            $day = (int) $matches[1];
-            $month = (int) $matches[2];
+        // Filtres spécifiques
+        if ($request->filled('category_id')) {
+            $categoryIds = [$request->category_id];
+            
+            // Inclure les sous-catégories si demandé
+            if ($request->boolean('include_subcategories')) {
+                $category = Category::find($request->category_id);
+                if ($category) {
+                    $categoryIds = array_merge($categoryIds, 
+                        $category->getDescendants()->pluck('id')->toArray()
+                    );
+                }
+            }
+            
+            $query->whereIn('category_id', $categoryIds);
+        }
 
-            // Vérifier que c'est bien jour/mois et non mois/jour
-            if ($day <= 31 && $month <= 12) {
-                $query->orWhere(function($subQuery) use ($day, $month) {
-                    $subQuery->whereMonth('created_at', $month)
-                            ->whereDay('created_at', $day);
-                });
+        if ($request->filled('brand_id')) {
+            $query->where('brand_id', $request->brand_id);
+        }
+
+        if ($request->filled('status')) {
+            $query->where('is_active', $request->status === 'active');
+        }
+
+        // Filtres de prix
+        if ($request->filled(['price_min', 'price_max'])) {
+            $query->whereBetween('price', [
+                (float) $request->price_min,
+                (float) $request->price_max
+            ]);
+        }
+
+        // Filtres de stock
+        if ($request->filled('stock_status')) {
+            match ($request->stock_status) {
+                'in_stock' => $query->where('stock_quantity', '>', 0),
+                'low_stock' => $query->whereBetween('stock_quantity', [1, 10]),
+                'out_of_stock' => $query->where('stock_quantity', 0),
+            };
+        }
+
+        // Filtres d'attributs dynamiques
+        if ($request->filled('attributes')) {
+            foreach ($request->attributes as $attributeSlug => $value) {
+                if (!empty($value)) {
+                    $query->withAttributeValue($attributeSlug, $value);
+                }
             }
         }
+
+        $sort = $request->input('sort', 'created_at');
+        $direction = $request->input('direction', 'desc');
+        $perPage = (int) $request->input('per_page', 15);
+
+        $products = $query->orderBy($sort, $direction)
+            ->paginate($perPage)
+            ->appends($request->all());
+
+        return Inertia::render('Products/Index', [
+            'products' => $products,
+            'filters' => $request->only([
+                'search', 'category_id', 'brand_id', 'status',
+                'price_min', 'price_max', 'stock_status', 'attributes',
+                'include_subcategories'
+            ]),
+            'categories' => Category::getFlatList(),
+            'brands' => Brand::orderBy('name')->get(['id', 'name']),
+            'sort' => $sort,
+            'direction' => $direction,
+        ]);
     }
 
     public function create(): Response
     {
         return Inertia::render('Products/Create', [
-            'brands'     => Brand::orderBy('name')->get(['id', 'name']),
-            'categories' => Category::orderBy('name')->get(['id', 'name', 'slug']),
+            'brands' => Brand::orderBy('name')->get(['id', 'name']),
+            'categories' => Category::getFlatList(),
             'currencies' => Currency::all(['code', 'symbol']),
-            'taxRates'   => TaxRate::all(['id', 'name', 'rate']),
+            'taxRates' => TaxRate::all(['id', 'name', 'rate']),
         ]);
     }
 
     public function store(ProductRequest $request): RedirectResponse
     {
         $validated = $request->validated();
-        $category  = Category::findOrFail($validated['category_id']);
-        $slug      = $category->slug;
-        $config    = config('catalog.specializations');
+        
+        DB::transaction(function () use ($validated, $request) {
+            $product = Product::create([
+                ...$validated,
+                'id' => (string) Str::uuid()
+            ]);
 
-        $product = Product::create([...$validated, 'id' => (string) Str::uuid()]);
-
-        if (isset($config[$slug]) && isset($validated['spec'])) {
-            $modelClass = $config[$slug]['model'] ?? null;
-            $fields     = $config[$slug]['fields'] ?? [];
-
-            $specData = array_merge($fields, $validated['spec'], ['product_id' => $product->id]);
-            $relation = Str::camel(Str::singular($slug));
-
-            if (method_exists($product, $relation) && method_exists($product->{$relation}(), 'create')) {
-                $product->{$relation}()->create($specData);
-            } elseif ($modelClass && class_exists($modelClass)) {
-                $modelClass::create($specData);
+            // Gérer les attributs dynamiques
+            if ($request->filled('attributes')) {
+                foreach ($request->attributes as $attributeSlug => $value) {
+                    if (!is_null($value) && $value !== '') {
+                        $product->setAttributeValue($attributeSlug, $value);
+                    }
+                }
             }
-        }
 
-        foreach ($request->input('compatibilities', []) as $entry) {
-            $product->compatibleWith()->attach(
-                $entry['compatible_with_id'],
-                [
-                    'direction' => $entry['direction'] ?? 'bidirectional',
-                    'note'      => $entry['note'] ?? null,
-                ]
-            );
-        }
+            // Gérer les compatibilités (conservées)
+            foreach ($request->input('compatibilities', []) as $entry) {
+                $product->compatibleWith()->attach(
+                    $entry['compatible_with_id'],
+                    [
+                        'direction' => $entry['direction'] ?? 'bidirectional',
+                        'note' => $entry['note'] ?? null,
+                    ]
+                );
+            }
 
-        $this->syncImages($request, $product);
+            $this->syncImages($request, $product);
+        });
 
-        return to_route('products.index')->with('success', 'Produit créé.');
+        return to_route('products.index')
+            ->with('success', 'Produit créé avec succès.');
     }
 
     public function show(Product $product): Response
     {
         $product->load([
-            'brand','category','currency','taxRate','images',
-            'ram','processor','hardDrive','powerSupply','motherboard','networkCard',
-            'graphicCard','license','software','accessory','laptop','desktop','server',
-            'compatibleWith.category','isCompatibleWith.category',
+            'brand', 'category.parent', 'currency', 'taxRate', 'images',
+            'attributeValues.attribute', 'variants.images',
+            'compatibleWith.category', 'isCompatibleWith.category',
         ]);
 
-        $all = collect();
-
+        // Préparer les compatibilités
+        $allCompatibilities = collect();
         foreach ($product->compatibleWith as $p) {
-            $all->push((object)[
+            $allCompatibilities->push([
                 'id' => $p->id,
                 'name' => $p->name,
                 'category' => $p->category?->name,
@@ -307,7 +186,7 @@ class ProductController extends Controller
             ]);
         }
         foreach ($product->isCompatibleWith as $p) {
-            $all->push((object)[
+            $allCompatibilities->push([
                 'id' => $p->id,
                 'name' => $p->name,
                 'category' => $p->category?->name,
@@ -316,34 +195,47 @@ class ProductController extends Controller
             ]);
         }
 
-        $allCompatibilities = $all->unique('id')->values();
-        $base = $product->toArray();
-        $config = config('catalog.specializations');
-
-        foreach ($config as $slug => $_) {
-            $relation = Str::camel(Str::singular($slug));
-            if ($product->relationLoaded($relation)) {
-                $base[$relation] = $product->getRelation($relation);
-            }
-        }
-
         return Inertia::render('Products/Show', [
-            'product' => $base,
-            'allCompatibilities' => $allCompatibilities,
+            'product' => array_merge($product->toArray(), [
+                'formatted_attributes' => $product->getFormattedAttributes(),
+                'breadcrumb' => $product->category?->breadcrumb ?? collect(),
+                'effective_price' => $product->getEffectivePrice(),
+                'effective_stock' => $product->getEffectiveStock(),
+                'is_in_stock' => $product->isInStock(),
+            ]),
+            'allCompatibilities' => $allCompatibilities->unique('id')->values(),
         ]);
     }
 
     public function edit(Product $product): Response
     {
-        $slug = $product->category?->slug;
-        $relations = ['brand', 'category', 'currency', 'taxRate', 'images'];
+        $product->load([
+            'brand', 'category', 'currency', 'taxRate', 'images',
+            'attributeValues.attribute', 'variants',
+            'compatibleWith', 'isCompatibleWith'
+        ]);
 
-        if ($slug) {
-            $relations[] = Str::camel(Str::singular($slug));
-        }
+        // Préparer les attributs de la catégorie
+        $categoryAttributes = $product->getCategoryAttributes();
+        $currentValues = $product->attributeValues->keyBy('category_attribute_id');
 
-        $product->load(array_merge($relations, ['compatibleWith', 'isCompatibleWith']));
+        $attributes = $categoryAttributes->map(function ($attr) use ($currentValues) {
+            $value = $currentValues->get($attr->id);
+            return [
+                'id' => $attr->id,
+                'name' => $attr->name,
+                'slug' => $attr->slug,
+                'type' => $attr->type,
+                'options' => $attr->options,
+                'unit' => $attr->unit,
+                'is_required' => $attr->is_required,
+                'description' => $attr->description,
+                'validation_rules' => $attr->validation_rules,
+                'current_value' => $value ? $value->getCastedValue() : null,
+            ];
+        });
 
+        // Préparer les compatibilités
         $compatibilities = $product->compatibleWith
             ->merge($product->isCompatibleWith)
             ->values()
@@ -355,11 +247,12 @@ class ProductController extends Controller
             ]);
 
         return Inertia::render('Products/Edit', [
-            'brands' => Brand::orderBy('name')->get(['id', 'name']),
             'product' => $product,
-            'categories' => Category::orderBy('name')->get(['id', 'name', 'slug']),
+            'brands' => Brand::orderBy('name')->get(['id', 'name']),
+            'categories' => Category::getFlatList(),
             'currencies' => Currency::all(['code', 'symbol']),
             'taxRates' => TaxRate::all(['id', 'name', 'rate']),
+            'categoryAttributes' => $attributes,
             'compatibilities' => $compatibilities,
         ]);
     }
@@ -370,74 +263,113 @@ class ProductController extends Controller
             $validated = $request->validated();
             $product->update($validated);
 
-            $category = Category::findOrFail($validated['category_id']);
-            $slug = $category->slug;
-            $config = config('catalog.specializations');
-
-            if (isset($config[$slug]) && isset($validated['spec'])) {
-                $relation = Str::camel(Str::singular($slug));
-
-                if (method_exists($product, $relation)) {
-                    $product->{$relation}()->updateOrCreate(
-                        ['product_id' => $product->id],
-                        $validated['spec']
-                    );
+            // Mettre à jour les attributs dynamiques
+            if ($request->filled('attributes')) {
+                foreach ($request->attributes as $attributeSlug => $value) {
+                    if (!is_null($value) && $value !== '') {
+                        $product->setAttributeValue($attributeSlug, $value);
+                    } else {
+                        // Supprimer l'attribut si la valeur est vide
+                        $product->attributeValues()
+                            ->whereHas('attribute', fn($q) => $q->where('slug', $attributeSlug))
+                            ->delete();
+                    }
                 }
             }
 
-            $sent = collect($request->input('compatibilities', []))
-                ->filter(fn ($e) => !empty($e['compatible_with_id']))
-                ->map(fn ($e) => [
-                    'id' => (string) $e['compatible_with_id'],
-                    'direction' => $e['direction'] ?? 'bidirectional',
-                    'note' => $e['note'] ?? null,
-                ]);
-
-            $toSync = $sent->mapWithKeys(fn ($e) => [
-                $e['id'] => ['direction' => $e['direction'], 'note' => $e['note']],
-            ]);
-
-            $existing = ProductCompatibility::withTrashed()
-                ->where(fn ($q) => $q
-                    ->where('product_id', $product->id)
-                    ->orWhere('compatible_with_id', $product->id))
-                ->get();
-
-            foreach ($existing as $pivot) {
-                $otherId = $pivot->product_id === $product->id
-                    ? $pivot->compatible_with_id
-                    : $pivot->product_id;
-
-                if ($toSync->has($otherId)) {
-                    $attrs = $toSync[$otherId];
-                    if ($pivot->trashed()) $pivot->restore();
-                    $pivot->update($attrs);
-                    $toSync->forget($otherId);
-                } elseif (is_null($pivot->deleted_at)) {
-                    $pivot->delete();
-                }
-            }
-
-            foreach ($toSync as $otherId => $attrs) {
-                $product->compatibleWith()->attach($otherId, $attrs);
-            }
-
+            // Gérer les compatibilités (logique conservée)
+            $this->updateCompatibilities($request, $product);
             $this->syncImages($request, $product);
         });
 
-        return to_route('products.show', $product)->with('success', 'Produit mis à jour.');
+        return to_route('products.show', $product)
+            ->with('success', 'Produit mis à jour avec succès.');
     }
 
     public function destroy(Product $product): RedirectResponse
     {
         $product->delete();
-        return back()->with('success', 'Produit supprimé.');
+        return back()->with('success', 'Produit supprimé avec succès.');
     }
 
     public function restore(Product $product): RedirectResponse
     {
         $product->restore();
-        return back()->with('success', 'Produit restauré.');
+        return back()->with('success', 'Produit restauré avec succès.');
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* API pour récupérer les attributs d'une catégorie                  */
+    /* ------------------------------------------------------------------ */
+    public function getCategoryAttributes(Request $request)
+    {
+        $categoryId = $request->input('category_id');
+        
+        if (!$categoryId) {
+            return response()->json(['attributes' => []]);
+        }
+
+        $category = Category::with('attributes')->find($categoryId);
+        
+        if (!$category) {
+            return response()->json(['attributes' => []]);
+        }
+
+        // Récupérer les attributs de la catégorie et de ses parents
+        $attributes = collect();
+        $current = $category;
+
+        while ($current) {
+            $attributes = $attributes->merge($current->attributes);
+            $current = $current->parent;
+        }
+
+        return response()->json([
+            'attributes' => $attributes->unique('id')->sortBy('sort_order')->values()
+        ]);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Méthodes privées conservées                                        */
+    /* ------------------------------------------------------------------ */
+    private function updateCompatibilities(ProductRequest $request, Product $product): void
+    {
+        $sent = collect($request->input('compatibilities', []))
+            ->filter(fn ($e) => !empty($e['compatible_with_id']))
+            ->map(fn ($e) => [
+                'id' => (string) $e['compatible_with_id'],
+                'direction' => $e['direction'] ?? 'bidirectional',
+                'note' => $e['note'] ?? null,
+            ]);
+
+        $toSync = $sent->mapWithKeys(fn ($e) => [
+            $e['id'] => ['direction' => $e['direction'], 'note' => $e['note']],
+        ]);
+
+        $existing = ProductCompatibility::withTrashed()
+            ->where(fn ($q) => $q
+                ->where('product_id', $product->id)
+                ->orWhere('compatible_with_id', $product->id))
+            ->get();
+
+        foreach ($existing as $pivot) {
+            $otherId = $pivot->product_id === $product->id
+                ? $pivot->compatible_with_id
+                : $pivot->product_id;
+
+            if ($toSync->has($otherId)) {
+                $attrs = $toSync[$otherId];
+                if ($pivot->trashed()) $pivot->restore();
+                $pivot->update($attrs);
+                $toSync->forget($otherId);
+            } elseif (is_null($pivot->deleted_at)) {
+                $pivot->delete();
+            }
+        }
+
+        foreach ($toSync as $otherId => $attrs) {
+            $product->compatibleWith()->attach($otherId, $attrs);
+        }
     }
 
     protected function syncImages(ProductRequest $request, Product $product): void
@@ -498,12 +430,9 @@ class ProductController extends Controller
 
     public function compatibleList()
     {
-        $machineSlugs = ['desktop', 'desktops', 'laptop', 'laptops', 'server', 'servers'];
-
         return Product::query()
             ->select('products.id', 'products.name')
             ->join('categories', 'categories.id', '=', 'products.category_id')
-            ->whereIn('categories.slug', $machineSlugs)
             ->whereNull('products.deleted_at')
             ->orderBy('products.name')
             ->get();
